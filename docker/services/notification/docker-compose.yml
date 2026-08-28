@@ -1,0 +1,56 @@
+##############################################################################
+# docker/services/notification/docker-compose.yml — Notification Service
+#
+# Networks:
+#   rabbitmq_net       (external) ← shared broker network → reaches RabbitMQ
+#   notification_net   (private)  ← service-private → future SMTP relay, etc.
+#
+# DIFFERENT NETWORK — SAME BROKER EXAMPLE:
+#   notification-service lives on notification_net (172.21.4.0/24).
+#   audit-service lives on audit_net (172.21.5.0/24).
+#   These are completely different Docker networks with no route between them.
+#   BOTH connect to the same RabbitMQ broker via rabbitmq_net.
+#   notification-service and audit-service cannot communicate directly,
+#   but they both receive a copy of the same fanout broadcast because
+#   they each bound a queue to app.fanout on the shared broker.
+#
+# Usage (from project root):
+#   docker compose -f docker/services/notification/docker-compose.yml up --build -d
+##############################################################################
+name: svc-notification
+
+services:
+  notification-service:
+    build:
+      context: ../../../
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/notification-service/index.ts
+    image: svc-notification:latest
+    container_name: notification-service
+    restart: unless-stopped
+
+    environment:
+      SERVICE_NAME: notification-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ENV: ${NODE_ENV:-production}
+
+    env_file:
+      - ../../../.env
+
+    networks:
+      - rabbitmq_net                # ← fanout + topic consumer via shared broker
+      - notification_net            # ← private: notification-service + SMTP relay / push provider
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  rabbitmq_net:
+    external: true
+
+  notification_net:
+    name: notification_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.4.0/24    # cannot reach audit_net (172.21.5.0/24) — different broadcast domain

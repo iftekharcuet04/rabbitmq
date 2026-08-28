@@ -1,0 +1,55 @@
+##############################################################################
+# docker/services/Dockerfile.service — Generic microservice image
+#
+# Shared by all services. Build arg SERVICE_ENTRY selects the entry point.
+# Build context MUST be the project root (where package.json lives).
+#
+# Example:
+#   docker build \
+#     --build-arg SERVICE_ENTRY=services/order-service/index.ts \
+#     -f docker/services/Dockerfile.service \
+#     -t svc-order .
+##############################################################################
+
+# ── Stage 1: Dependencies ────────────────────────────────────────────────────
+FROM node:20-alpine AS deps
+
+WORKDIR /app
+
+# Copy only manifests first — maximises Docker layer cache hits
+COPY package.json package-lock.json ./
+RUN npm ci && npm cache clean --force
+
+# ── Stage 2: Build ───────────────────────────────────────────────────────────
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+# Bring in node_modules from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json tsconfig.json ./
+COPY src ./src
+COPY services ./services
+
+# ── Stage 3: Runtime ─────────────────────────────────────────────────────────
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# Non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Copy everything from build stage
+COPY --from=build --chown=appuser:appgroup /app /app
+
+# Which service entry point to run (injected at build time)
+ARG SERVICE_ENTRY
+ENV SERVICE_ENTRY=${SERVICE_ENTRY}
+
+USER appuser
+
+# Healthcheck: verify AMQP connection is reachable
+HEALTHCHECK --interval=20s --timeout=5s --retries=3 \
+  CMD node -e "require('amqplib').connect(process.env.RABBITMQ_URL).then(c=>{c.close();process.exit(0);}).catch(()=>process.exit(1));"
+
+CMD ["sh", "-c", "node -r ts-node/register $SERVICE_ENTRY"]

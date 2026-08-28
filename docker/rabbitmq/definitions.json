@@ -1,0 +1,28 @@
+{
+  "vhosts": [
+    { "name": "/" }
+  ],
+  "policies": [
+    {
+      "vhost": "/",
+      "name": "ha-named-queues",
+      "pattern": "^queue\\.",
+      "definition": {
+        "ha-mode": "all",
+        "ha-sync-mode": "automatic"
+      },
+      "priority": 0,
+      "apply-to": "queues"
+    },
+    {
+      "vhost": "/",
+      "name": "ttl-rpc-reply-queues",
+      "pattern": "^amq\\.gen",
+      "definition": {
+        "expires": 60000
+      },
+      "priority": 1,
+      "apply-to": "queues"
+    }
+  ]
+}

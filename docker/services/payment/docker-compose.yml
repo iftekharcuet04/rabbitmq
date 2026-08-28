@@ -1,0 +1,58 @@
+##############################################################################
+# docker/services/payment/docker-compose.yml — Payment Service
+#
+# Networks:
+#   rabbitmq_net  (external) ← shared broker network → reaches RabbitMQ
+#   payment_net   (private)  ← service-private → payment-service + its DB/cache
+#
+# WHY PAYMENT GETS ITS OWN NETWORK?
+#   Payment service would typically have a PCI-DSS scoped database.
+#   Putting payment-db on payment_net and NOT on rabbitmq_net ensures
+#   the database is network-isolated from the broker and all other services.
+#   Only payment-service can talk to payment-db.
+#
+# COMMUNICATION WITH ORDER-SERVICE:
+#   Payment-service NEVER connects to order-service directly.
+#   It consumes order.created events from RabbitMQ (via rabbitmq_net)
+#   and publishes order.paid / order.cancelled back to the broker.
+#
+# Usage (from project root):
+#   docker compose -f docker/services/payment/docker-compose.yml up --build -d
+##############################################################################
+name: svc-payment
+
+services:
+  payment-service:
+    build:
+      context: ../../../
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/payment-service/index.ts
+    image: svc-payment:latest
+    container_name: payment-service
+    restart: unless-stopped
+
+    environment:
+      SERVICE_NAME: payment-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ENV: ${NODE_ENV:-production}
+
+    env_file:
+      - ../../../.env
+
+    networks:
+      - rabbitmq_net                # ← reaches RabbitMQ on shared broker network
+      - payment_net                 # ← private: payment-service + future payment-db
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  rabbitmq_net:
+    external: true
+
+  payment_net:
+    name: payment_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.2.0/24   # isolated — order-service cannot reach this subnet

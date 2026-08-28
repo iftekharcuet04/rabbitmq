@@ -1,0 +1,58 @@
+##############################################################################
+# docker/services/inventory/docker-compose.yml — Inventory Service
+#
+# Networks:
+#   rabbitmq_net    (external) ← shared broker network → reaches RabbitMQ
+#   inventory_net   (private)  ← service-private → inventory-service + inventory-db
+#
+# DUAL ROLE — Why inventory is special:
+#   1. RPC Server on rabbitmq_net: responds to stock-check requests from order-service
+#      (order-service sends RPC call → broker → inventory-service responds)
+#   2. Event Consumer on rabbitmq_net: consumes OrderCreated to reserve stock
+#
+# NETWORK ISOLATION EXAMPLE:
+#   order-service (order_net) and inventory-service (inventory_net) are on
+#   DIFFERENT private networks. They cannot ping each other.
+#   Yet they communicate synchronously via RabbitMQ RPC — both only need rabbitmq_net.
+#   This is the key architectural insight: RabbitMQ acts as the ONLY bridge.
+#
+# Usage (from project root):
+#   docker compose -f docker/services/inventory/docker-compose.yml up --build -d
+##############################################################################
+name: svc-inventory
+
+services:
+  inventory-service:
+    build:
+      context: ../../../
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/inventory-service/index.ts
+    image: svc-inventory:latest
+    container_name: inventory-service
+    restart: unless-stopped
+
+    environment:
+      SERVICE_NAME: inventory-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ENV: ${NODE_ENV:-production}
+
+    env_file:
+      - ../../../.env
+
+    networks:
+      - rabbitmq_net                # ← RPC server + event consumer via broker
+      - inventory_net               # ← private: inventory-service + inventory-db
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  rabbitmq_net:
+    external: true
+
+  inventory_net:
+    name: inventory_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.3.0/24

@@ -1,0 +1,59 @@
+##############################################################################
+# docker/services/order/docker-compose.yml — Order Service
+#
+# Networks:
+#   rabbitmq_net (external) ← shared broker network → CAN reach RabbitMQ
+#   order_net    (private)  ← service-private network → order-service only
+#
+# ISOLATION PRINCIPLE:
+#   order-service lives on TWO networks:
+#     1. rabbitmq_net — so it can publish/consume from the broker
+#     2. order_net    — its own private network for any future dependencies
+#        (e.g. order-db, order-cache) that ONLY order-service needs
+#
+#   payment-service, inventory-service, etc. are on DIFFERENT private nets.
+#   They cannot reach order-service directly. They communicate ONLY via RabbitMQ.
+#   This enforces the "services are opaque" microservice principle.
+#
+# Usage (from project root):
+#   docker compose -f docker/services/order/docker-compose.yml up --build -d
+##############################################################################
+name: svc-order
+
+services:
+  order-service:
+    build:
+      context: ../../../             # project root (has package.json + src/ + services/)
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/order-service/index.ts
+    image: svc-order:latest
+    container_name: order-service
+    restart: unless-stopped
+
+    environment:
+      SERVICE_NAME: order-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ENV: ${NODE_ENV:-production}
+
+    env_file:
+      - ../../../.env               # shared root env file
+
+    networks:
+      - rabbitmq_net                # ← reaches RabbitMQ broker
+      - order_net                   # ← private: order-service + its own dependencies
+
+    depends_on: {}                  # broker is external; ensure it's up before this compose
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  rabbitmq_net:
+    external: true                  # created by docker-compose.rabbitmq.yml
+
+  order_net:
+    name: order_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.1.0/24    # private subnet — isolated from other services

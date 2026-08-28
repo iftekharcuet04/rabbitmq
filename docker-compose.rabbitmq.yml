@@ -1,0 +1,66 @@
+##############################################################################
+# docker-compose.rabbitmq.yml — RabbitMQ Broker (standalone)
+#
+# Creates:
+#   Network:  rabbitmq_net  ← shared broker network every service joins
+#   Volume:   rabbitmq_data ← persistent message + metadata storage
+#
+# Usage:
+#   docker compose -f docker-compose.rabbitmq.yml up -d
+#   docker compose -f docker-compose.rabbitmq.yml down
+#   docker compose -f docker-compose.rabbitmq.yml logs -f
+#
+# Management UI:  http://localhost:15672  (admin / secret)
+# Prometheus:     http://localhost:15692/metrics
+##############################################################################
+name: rabbitmq-broker
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq          # stable hostname — services connect via this name
+    restart: unless-stopped
+
+    ports:
+      - "5672:5672"             # AMQP — service containers connect here
+      - "15672:15672"           # Management UI
+      - "15692:15692"           # Prometheus metrics
+
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-secret}
+      RABBITMQ_DEFAULT_VHOST: /
+
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./docker/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./docker/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      rabbitmq_net:
+        aliases:
+          - rabbitmq            # all containers resolve this as the broker hostname
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+# rabbitmq_net is declared here and referenced as `external: true` in each
+# service compose file. This is the ONLY shared network across all composes.
+networks:
+  rabbitmq_net:
+    name: rabbitmq_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24   # deterministic subnet for the broker network
+
+volumes:
+  rabbitmq_data:
+    driver: local

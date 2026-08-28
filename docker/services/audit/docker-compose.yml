@@ -1,0 +1,61 @@
+##############################################################################
+# docker/services/audit/docker-compose.yml — Audit Service
+#
+# Networks:
+#   rabbitmq_net  (external) ← shared broker network → reaches RabbitMQ
+#   audit_net     (private)  ← service-private → audit-service + audit-db (append-only)
+#
+# THE "DIFFERENT NETWORK, SAME BROKER" PROOF:
+#   audit-service is on audit_net    (172.21.5.0/24)
+#   order-service is on order_net    (172.21.1.0/24)
+#   payment-service is on payment_net(172.21.2.0/24)
+#
+#   None of these can reach audit-service's private net.
+#   audit-service cannot reach any of theirs.
+#   YET — audit-service receives EVERY event from all of them because:
+#     - Fanout queue: all broadcast events arrive regardless of publisher's network
+#     - Topic queue: audit.# pattern captures all domain audit events
+#
+#   This is the definitive proof that RabbitMQ decouples services at both
+#   the APPLICATION LEVEL and the NETWORK LEVEL.
+#
+# Usage (from project root):
+#   docker compose -f docker/services/audit/docker-compose.yml up --build -d
+##############################################################################
+name: svc-audit
+
+services:
+  audit-service:
+    build:
+      context: ../../../
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/audit-service/index.ts
+    image: svc-audit:latest
+    container_name: audit-service
+    restart: unless-stopped
+
+    environment:
+      SERVICE_NAME: audit-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NODE_ENV: ${NODE_ENV:-production}
+
+    env_file:
+      - ../../../.env
+
+    networks:
+      - rabbitmq_net                # ← the ONLY connection to the rest of the world
+      - audit_net                   # ← private: audit-service + audit-db (append-only store)
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  rabbitmq_net:
+    external: true
+
+  audit_net:
+    name: audit_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.5.0/24    # fully isolated private subnet — maximum security for audit data

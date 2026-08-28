@@ -1,0 +1,247 @@
+##############################################################################
+# docker-compose.yml — Root convenience compose (ALL services together)
+#
+# IMPORTANT: This is a CONVENIENCE file for local dev.
+#            In production each service compose runs independently,
+#            potentially on different hosts / clusters.
+#
+# Network Architecture:
+#
+#   ┌─────────────────────────────────────────────────────────────────┐
+#   │                        rabbitmq_net (shared)  172.20.0.0/24    │
+#   │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐ │
+#   │  │ rabbitmq │  │  order   │  │ payment  │  │   inventory    │ │
+#   │  │ :5672    │  │ service  │  │ service  │  │   service      │ │
+#   │  └──────────┘  └──────────┘  └──────────┘  └────────────────┘ │
+#   │                     │              │               │            │
+#   └─────────────────────┼──────────────┼───────────────┼────────────┘
+#                         │              │               │
+#                 ┌───────┘      ┌───────┘       ┌──────┘
+#                 ▼              ▼               ▼
+#           order_net      payment_net     inventory_net
+#         172.21.1.0/24  172.21.2.0/24   172.21.3.0/24
+#         (private)       (PCI scoped)    (private)
+#
+#   notification-service → rabbitmq_net + notification_net (172.21.4.0/24)
+#   audit-service        → rabbitmq_net + audit_net        (172.21.5.0/24)
+#
+# KEY INSIGHT:
+#   order-service (172.21.1.0) CANNOT reach payment-service (172.21.2.0).
+#   They are on completely different networks.
+#   They communicate EXCLUSIVELY via RabbitMQ on the shared rabbitmq_net.
+#
+# Usage:
+#   docker compose up --build -d         # start everything
+#   docker compose down                  # stop everything
+#   docker compose logs -f               # follow all logs
+#   docker compose logs -f order-service # follow specific service
+##############################################################################
+name: rabbitmq-platform
+
+services:
+
+  # ── Broker (must start first) ───────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+      - "15692:15692"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-secret}
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./docker/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./docker/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      rabbitmq_net:
+        aliases:
+          - rabbitmq
+
+  # ── Order Service ───────────────────────────────────────────────────────────
+  # Network: rabbitmq_net (broker) + order_net (private)
+  # Cannot directly reach payment, inventory, notification, or audit services
+  order-service:
+    build:
+      context: .
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/order-service/index.ts
+    image: svc-order:latest
+    container_name: order-service
+    restart: unless-stopped
+    environment:
+      SERVICE_NAME: order-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      NODE_ENV: ${NODE_ENV:-development}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rabbitmq_net    # ← SHARED: reaches broker
+      - order_net       # ← PRIVATE: order-service's isolated world
+
+  # ── Inventory Service ───────────────────────────────────────────────────────
+  # Network: rabbitmq_net (broker) + inventory_net (private)
+  # RPC server listens on rpc.inventory.check — only reachable via RabbitMQ
+  # order-service (order_net) CANNOT directly connect to inventory-service (inventory_net)
+  inventory-service:
+    build:
+      context: .
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/inventory-service/index.ts
+    image: svc-inventory:latest
+    container_name: inventory-service
+    restart: unless-stopped
+    environment:
+      SERVICE_NAME: inventory-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      NODE_ENV: ${NODE_ENV:-development}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rabbitmq_net    # ← SHARED: RPC server + event consumer via broker
+      - inventory_net   # ← PRIVATE: isolated from order/payment/etc.
+
+  # ── Payment Service ─────────────────────────────────────────────────────────
+  # Network: rabbitmq_net (broker) + payment_net (private, PCI-scoped)
+  # Consumes: order.created → processes → publishes order.paid
+  # order-service (order_net) cannot reach payment-service (payment_net)
+  payment-service:
+    build:
+      context: .
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/payment-service/index.ts
+    image: svc-payment:latest
+    container_name: payment-service
+    restart: unless-stopped
+    environment:
+      SERVICE_NAME: payment-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      NODE_ENV: ${NODE_ENV:-development}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rabbitmq_net    # ← SHARED: consumer + publisher via broker
+      - payment_net     # ← PRIVATE: PCI-DSS scoped network
+
+  # ── Notification Service ────────────────────────────────────────────────────
+  # Network: rabbitmq_net (broker) + notification_net (private)
+  # Consumes: fanout broadcast + email/SMS topic queues
+  # Lives on notification_net — completely different network from audit-service
+  # Yet BOTH receive the same fanout broadcast via rabbitmq_net
+  notification-service:
+    build:
+      context: .
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/notification-service/index.ts
+    image: svc-notification:latest
+    container_name: notification-service
+    restart: unless-stopped
+    environment:
+      SERVICE_NAME: notification-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      NODE_ENV: ${NODE_ENV:-development}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rabbitmq_net        # ← SHARED: fanout + topic consumer
+      - notification_net    # ← PRIVATE: different network from audit-service (172.21.5.0)
+
+  # ── Audit Service ───────────────────────────────────────────────────────────
+  # Network: rabbitmq_net (broker) + audit_net (private)
+  # Receives: fanout + audit.# topic + log.error.* topic — ALL events
+  # audit_net (172.21.5.0/24) is a completely different network from all others
+  # Proof: different network, same broker → receives same events as notification-service
+  audit-service:
+    build:
+      context: .
+      dockerfile: docker/services/Dockerfile.service
+      args:
+        SERVICE_ENTRY: services/audit-service/index.ts
+    image: svc-audit:latest
+    container_name: audit-service
+    restart: unless-stopped
+    environment:
+      SERVICE_NAME: audit-service
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASS:-secret}@rabbitmq:5672/
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      NODE_ENV: ${NODE_ENV:-development}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rabbitmq_net    # ← SHARED: the ONLY connection to the outside world
+      - audit_net       # ← PRIVATE: maximum isolation for audit data
+
+# ── Network Declarations ───────────────────────────────────────────────────────
+networks:
+  # SHARED — every service joins this to reach RabbitMQ
+  rabbitmq_net:
+    name: rabbitmq_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+  # PRIVATE — each service has its own isolated network
+  order_net:
+    name: order_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.1.0/24
+
+  inventory_net:
+    name: inventory_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.2.0/24
+
+  payment_net:
+    name: payment_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.3.0/24
+
+  notification_net:
+    name: notification_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.4.0/24
+
+  audit_net:
+    name: audit_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.5.0/24   # no route to any other private subnet
+
+volumes:
+  rabbitmq_data:
+    driver: local
