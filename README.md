@@ -1,7 +1,9 @@
 # RabbitMQ Best Practices — Node.js / TypeScript
 
-> Production-grade RabbitMQ project showcasing all four AMQP exchange types
-> with SOLID principles, Factory, Strategy, Facade, and DI patterns.
+> Production-oriented RabbitMQ architecture and best-practices reference implementation,
+> showcasing all four AMQP exchange types with SOLID principles, Factory, Strategy, Facade, and DI patterns.
+> Some production concerns (cluster configuration, observability pipelines, publisher confirms,
+> operational monitoring) depend on your specific deployment environment and are not fully covered here.
 
 ---
 
@@ -97,7 +99,7 @@ src/
 
 ### 🏭 Abstract Factory — `MessagingFactory`
 Creates `Publisher` and `Consumer` instances each backed by a **dedicated channel**.
-amqplib channels are not thread-safe; one channel per publisher/consumer is the mandated best practice.
+Node.js is single-threaded, so the concern isn't concurrent thread access — it's that each channel carries internal async state (consumer tags, prefetch counters, pending confirms). Mixing unrelated publisher and consumer lifecycles on the same channel makes back-pressure and failure reasoning much harder; a dedicated channel per responsibility is the amqplib-recommended practice.
 
 ### 🎭 Facade — `RabbitMQFacade` + `TopologyBuilder` + `TopologySetup`
 - `TopologyBuilder` — wraps raw amqplib calls behind an intent-revealing API.
@@ -131,7 +133,7 @@ Enables idempotency checks, distributed tracing, and structured logging.
 
 ## Best Practices Implemented
 
-- ✅ **One channel per publisher/consumer** — amqplib channels are not thread-safe
+- ✅ **One channel per publisher/consumer** — independent async state per channel; avoids back-pressure and lifecycle conflicts
 - ✅ **Durable exchanges & queues** — survive broker restart
 - ✅ **Persistent messages** — survive broker restart
 - ✅ **Manual acknowledgement** — ack only after successful processing

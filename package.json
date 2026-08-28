@@ -1,34 +1,29 @@
 {
   "name": "rabbitmq-best-practices",
   "version": "1.0.0",
-  "description": "Production-grade RabbitMQ Node.js project showcasing all exchange types with SOLID + Design Patterns",
+  "description": "Production-oriented RabbitMQ Node.js project showcasing all exchange types with SOLID + Design Patterns",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "ts-node src/index.ts",
     "dev": "ts-node src/index.ts",
-
     "demo:direct": "ts-node src/demos/direct-exchange.demo.ts",
     "demo:fanout": "ts-node src/demos/fanout-exchange.demo.ts",
     "demo:topic": "ts-node src/demos/topic-exchange.demo.ts",
     "demo:headers": "ts-node src/demos/headers-exchange.demo.ts",
     "demo:all": "ts-node src/demos/all-exchanges.demo.ts",
     "consumer:start": "ts-node src/demos/consumer-runner.demo.ts",
-
     "svc:order": "ts-node services/order-service/index.ts",
     "svc:payment": "ts-node services/payment-service/index.ts",
     "svc:inventory": "ts-node services/inventory-service/index.ts",
     "svc:notification": "ts-node services/notification-service/index.ts",
     "svc:audit": "ts-node services/audit-service/index.ts",
-
     "docker:broker:up": "docker compose -f docker-compose.rabbitmq.yml up -d",
     "docker:broker:down": "docker compose -f docker-compose.rabbitmq.yml down",
     "docker:broker:logs": "docker compose -f docker-compose.rabbitmq.yml logs -f",
-
     "docker:all:up": "docker compose up --build -d",
     "docker:all:down": "docker compose down",
     "docker:all:logs": "docker compose logs -f",
-
     "docker:order:up": "docker compose -f docker/services/order/docker-compose.yml up --build -d",
     "docker:order:down": "docker compose -f docker/services/order/docker-compose.yml down",
     "docker:payment:up": "docker compose -f docker/services/payment/docker-compose.yml up --build -d",
@@ -39,14 +34,18 @@
     "docker:notification:down": "docker compose -f docker/services/notification/docker-compose.yml down",
     "docker:audit:up": "docker compose -f docker/services/audit/docker-compose.yml up --build -d",
     "docker:audit:down": "docker compose -f docker/services/audit/docker-compose.yml down",
-
     "docker:net:inspect": "docker network ls | grep -E 'rabbitmq|order|payment|inventory|notification|audit'",
     "docker:net:verify": "docker run --rm --network rabbitmq_net alpine ping -c 2 rabbitmq",
-
     "lint": "eslint 'src/**/*.ts' 'services/**/*.ts'",
     "test": "jest"
   },
-  "keywords": ["rabbitmq", "amqp", "message-queue", "design-patterns", "solid"],
+  "keywords": [
+    "rabbitmq",
+    "amqp",
+    "message-queue",
+    "design-patterns",
+    "solid"
+  ],
   "author": "RabbitMQ Best Practices",
   "license": "MIT",
   "dependencies": {

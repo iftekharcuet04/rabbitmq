@@ -37,7 +37,7 @@ export interface IConsumer {
 }
 
 /**
- * Consumer — production-grade message consumer.
+ * Consumer — production-oriented message consumer.
  *
  * Best practices implemented:
  *   ✓ Manual acknowledgement (ack / nack / requeue logic).

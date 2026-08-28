@@ -1,5 +1,10 @@
 # RabbitMQ Architecture & Usage Reference
 
+> **Scope:** Production-oriented RabbitMQ architecture and best-practices reference implementation.
+> Some production concerns — cluster configuration, observability pipelines, persistence strategy,
+> publisher confirms, and operational monitoring — depend on your specific deployment environment
+> and are not fully covered here.
+
 ## Table of Contents
 1. [Connection & Channel Model](#1-connection--channel-model)
 2. [Root `src/` Services](#2-root-src-services)
@@ -64,7 +69,7 @@ const connectionManager = ConnectionManager.getInstance();
 | `createChannel()` | raw `Channel` | `TopologySetup`, advanced service use |
 
 **Why one channel per publisher/consumer?**
-amqplib channels are not thread-safe. Interleaving publish and consume calls on the same channel causes frame corruption. Each long-lived operation gets its own channel.
+Node.js is single-threaded, so there are no concurrent threads racing on a channel. The issue is subtler: amqplib channels carry internal async state (pending confirms, consumer tags, prefetch counters). Interleaving unrelated publish and consume lifecycles on the same channel — especially around back-pressure and `drain` events — can cause unexpected frame ordering and makes reasoning about failures much harder. Giving each long-lived publisher and consumer its own dedicated channel keeps their state completely independent and aligns with the amqplib documentation recommendation.
 
 ---
 
@@ -170,7 +175,7 @@ await publisher.publish(
 
 ### `src/messaging/consumer.ts`
 
-**What it is:** Production-grade consumer wrapping `channel.consume()`.
+**What it is:** Production-oriented consumer wrapping `channel.consume()`.
 
 **How it is called:**
 ```ts
